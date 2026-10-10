@@ -1,0 +1,75 @@
+name: Build apps
+
+# Runs on every push, on demand (Actions tab -> "Run workflow"), and twice a
+# month. The scheduled runs matter: yt-dlp is frozen into each build, and
+# YouTube breaks old versions every few months. A fresh monthly build means
+# the "latest" download link keeps working without anyone doing anything.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 1,15 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: KaraokePitchShifter-Windows.exe
+          - os: macos-latest
+            asset: KaraokePitchShifter-macOS-AppleSilicon.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (always newest yt-dlp)
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade pywebview imageio-ffmpeg "yt-dlp>=2026.8.19" pyinstaller
+
+      - name: Show versions
+        run: |
+          python -c "import yt_dlp; print('yt-dlp', yt_dlp.version.__version__)"
+          python -c "import imageio_ffmpeg as f; print('ffmpeg', f.get_ffmpeg_exe())"
+
+      - name: Smoke test the pipeline before packaging
+        run: python ci_smoketest.py
+
+      - name: Build
+        run: pyinstaller karaoke-pitcher.spec --noconfirm
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Copy-Item "dist/Karaoke Pitch Shifter.exe" "${{ matrix.asset }}"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent "dist/Karaoke Pitch Shifter.app" "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+      - name: Publish to the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Newest build, rebuilt automatically twice a month so the YouTube
+            downloader stays current.
+
+            - Windows: download `KaraokePitchShifter-Windows.exe` below.
+            - Mac (Apple Silicon): download the `.zip` below.
+          files: ${{ matrix.asset }}
